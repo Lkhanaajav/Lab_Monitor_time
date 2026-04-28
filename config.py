@@ -21,7 +21,7 @@ USER_LIST_FILE = DATA_DIR / "allowed_users.csv"
 LOG_FILE = DATA_DIR / "usage_log.csv"
 AUDIT_KEY_FILE = DATA_DIR / ".audit_key"
 
-ADMIN_PASSWORD = "OU_Admin_2024"
+ADMIN_PASSWORD = "OU_Admin_2026"
 
 TEST_MODE = True
 

@@ -1,5 +1,6 @@
 """Admin portal — logs, user management, integrity verification."""
-from tkinter import messagebox, ttk
+from datetime import datetime
+from tkinter import filedialog, messagebox, ttk
 
 import customtkinter as ctk
 
@@ -57,13 +58,22 @@ class AdminWindow(ctk.CTkToplevel):
         scroll.pack(side="right", fill="y")
         self._tree.configure(yscrollcommand=scroll.set)
 
+        btn_row = ctk.CTkFrame(parent, fg_color="transparent")
+        btn_row.pack(pady=6)
         ctk.CTkButton(
-            parent, text="Refresh",
+            btn_row, text="Refresh",
             command=self._refresh_logs,
             font=theme.font_caption(),
             height=28, width=100,
             **theme.OUTLINE_BUTTON_KW,
-        ).pack(pady=6)
+        ).pack(side="left", padx=4)
+        ctk.CTkButton(
+            btn_row, text="Export to Excel",
+            command=self._export_logs,
+            font=theme.font_body_bold(),
+            height=28, width=140,
+            **theme.CRIMSON_BUTTON_KW,
+        ).pack(side="left", padx=4)
 
         self._refresh_logs()
 
@@ -79,6 +89,53 @@ class AdminWindow(ctk.CTkToplevel):
                 entry.get("End", ""), entry.get("Min", ""), entry.get("Status", ""),
                 short_hash,
             ))
+
+    def _export_logs(self):
+        try:
+            from openpyxl import Workbook
+        except ImportError:
+            messagebox.showerror(
+                "Missing dependency",
+                "openpyxl is required to export to Excel.\n\nInstall it with:\n    pip install openpyxl",
+                parent=self,
+            )
+            return
+
+        entries = audit_log.read_entries()
+        if not entries:
+            messagebox.showinfo("Export", "No log entries to export.", parent=self)
+            return
+
+        default_name = f"lab_usage_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        path = filedialog.asksaveasfilename(
+            parent=self,
+            title="Export Usage Logs",
+            defaultextension=".xlsx",
+            initialfile=default_name,
+            filetypes=[("Excel Workbook", "*.xlsx"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+
+        try:
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Usage Logs"
+            ws.append(audit_log.COLUMNS)
+            for entry in entries:
+                ws.append([entry.get(col, "") for col in audit_log.COLUMNS])
+            for col_idx, col_name in enumerate(audit_log.COLUMNS, start=1):
+                max_len = max(
+                    [len(col_name)] + [len(str(entry.get(col_name, ""))) for entry in entries]
+                )
+                ws.column_dimensions[ws.cell(row=1, column=col_idx).column_letter].width = min(max_len + 2, 60)
+            ws.freeze_panes = "A2"
+            wb.save(path)
+        except Exception as e:
+            messagebox.showerror("Export failed", str(e), parent=self)
+            return
+
+        messagebox.showinfo("Export", f"Exported {len(entries)} rows to:\n{path}", parent=self)
 
     # ---------- Users tab ----------
     def _build_users_tab(self, parent):

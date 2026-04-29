@@ -53,8 +53,27 @@ def ensure_audit_key() -> None:
     _migrate_if_needed(".audit_key", config.AUDIT_KEY_FILE)
 
 
+def ensure_apps_file() -> None:
+    """Create registered_apps.csv with header on first run, seeded with one Notepad row.
+
+    Seeding preserves the pre-multi-app default so existing installs keep working
+    until an admin curates the list.
+    """
+    if config.REGISTERED_APPS_FILE.exists():
+        return
+    with open(config.REGISTERED_APPS_FILE, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=list(config.APP_FIELDS))
+        writer.writeheader()
+        writer.writerow({
+            "display_name": "Notepad",
+            "exe_path": "notepad.exe",
+            "window_hint": "Notepad",
+        })
+
+
 def run() -> None:
     ensure_data_dir()
     ensure_user_list()
     ensure_log_file()
     ensure_audit_key()
+    ensure_apps_file()

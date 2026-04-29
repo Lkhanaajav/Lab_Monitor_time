@@ -398,7 +398,8 @@ class AppDialog(ctk.CTkToplevel):
         self._existing = existing
         self._on_saved = on_saved
         self.title("Edit App" if existing else "Add App")
-        self.geometry("440x340")
+        self.geometry("460x520")
+        self.minsize(420, 460)
         self.configure(fg_color=config.WHITE)
         self.transient(parent)
         self.grab_set()
@@ -407,14 +408,14 @@ class AppDialog(ctk.CTkToplevel):
         subtitle = "Update an existing entry" if existing else "Register a new app"
         HeaderBar(self, title, subtitle).pack(fill="x")
 
-        body = ctk.CTkFrame(self, fg_color=config.WHITE)
+        body = ctk.CTkScrollableFrame(self, fg_color=config.WHITE)
         body.pack(fill="both", expand=True, padx=16, pady=12)
 
         self._fields: dict[str, FormField] = {}
         for fname in config.APP_FIELDS:
             label = fname.replace("_", " ").title()
             ff = FormField(body, label)
-            ff.pack(fill="x", pady=4)
+            ff.pack(fill="x", pady=6)
             if existing:
                 ff.set(existing.get(fname, ""))
             self._fields[fname] = ff

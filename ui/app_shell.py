@@ -3,6 +3,7 @@ import os
 import time
 
 import customtkinter as ctk
+import psutil
 
 import app_registry
 import config
@@ -123,11 +124,42 @@ class AppShell(ctk.CTk):
             AdminWindow(self)
 
     def _handle_close(self) -> None:
+        # Kiosk mode: ignore X / Alt+F4. Use Admin Portal → Exit App for clean shutdown.
+        return
+
+    def exit_app(self) -> None:
+        """Clean shutdown — terminates the watchdog and any active session, then exits."""
+        self._stop_external_watchdog()
         self._cancel_watchdog()
         if self.state_.active:
             self._cancel_tick()
             session.end_session(self.state_, "AppClose", app_registry.load_apps())
         self.destroy()
+
+    def _stop_external_watchdog(self) -> None:
+        pid_file = config.DATA_DIR / ".watchdog.pid"
+        if not pid_file.exists():
+            return
+        try:
+            pid = int(pid_file.read_text(encoding="utf-8").strip())
+        except (ValueError, OSError):
+            return
+        try:
+            proc = psutil.Process(pid)
+            name = (proc.name() or "").lower()
+            is_exe = name == "labmonitorwatchdog.exe"
+            is_script = name.startswith("python") and any(
+                "watchdog.py" in (arg or "").lower() for arg in proc.cmdline()
+            )
+            if not (is_exe or is_script):
+                return
+            proc.terminate()
+            try:
+                proc.wait(timeout=2)
+            except psutil.TimeoutExpired:
+                proc.kill()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
 
     # ---------- tick loop ----------
     def _schedule_tick(self) -> None:

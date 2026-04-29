@@ -43,6 +43,24 @@ class AdminWindow(ctk.CTkToplevel):
         self._build_apps_tab(self._tabs.tab("Manage Apps"))
         self._build_integrity_tab(self._tabs.tab("Integrity"))
 
+        ctk.CTkButton(
+            self, text="Exit Lab Monitor",
+            command=self._exit_app,
+            font=theme.font_body_bold(),
+            height=32, width=180,
+            **theme.CRIMSON_BUTTON_KW,
+        ).pack(pady=(0, 12))
+
+    def _exit_app(self) -> None:
+        if not messagebox.askyesno(
+            "Exit Lab Monitor",
+            "Shut down the kiosk? The watchdog will also exit.\n"
+            "Re-launch by running LabMonitor.exe.",
+            parent=self,
+        ):
+            return
+        self.master.exit_app()
+
     # ---------- Logs tab ----------
     def _build_logs_tab(self, parent):
         container = ctk.CTkFrame(parent, fg_color=config.WHITE)

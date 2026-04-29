@@ -2,3 +2,8 @@ __pycache__/
 *.pyc
 .audit_key
 usage_log.csv
+
+# PyInstaller artifacts
+build/
+dist/
+*.spec

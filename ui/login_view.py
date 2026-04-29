@@ -17,47 +17,65 @@ class LoginView(ctk.CTkFrame):
         on_login_success: Callable[[dict, list[dict]], None],
         on_admin_requested: Callable[[], None],
     ):
-        super().__init__(parent, fg_color=config.WHITE)
+        super().__init__(parent, fg_color=config.WHITE, corner_radius=0)
         self._on_login_success = on_login_success
         self._on_admin_requested = on_admin_requested
         self._authed_user: dict | None = None
         self._app_vars: list[tuple[ctk.BooleanVar, dict]] = []
         self._start_btn: ctk.CTkButton | None = None
 
-        HeaderBar(self, "OU Lab Access", "Sign in to use lab equipment").pack(fill="x")
+        HeaderBar(self, "OU Lab Access", "Equipment access portal").pack(fill="x")
 
         # The two step frames live inside a single container so swapping is cheap.
         self._steps_container = ctk.CTkFrame(self, fg_color=config.WHITE)
-        self._steps_container.pack(fill="both", expand=True, padx=20, pady=12)
+        self._steps_container.pack(fill="both", expand=True, padx=32, pady=24)
 
         self._cred_step = self._build_credentials_step(self._steps_container)
         self._picker_step: ctk.CTkFrame | None = None  # built on demand
 
+        # Bind Enter key to submit credentials (only acts when credentials step is shown).
+        parent.bind("<Return>", lambda e: self._on_unlock_if_visible())
+
         self._show_credentials_step()
+        self.after(100, self._username.focus)
 
     # ---------- step 1: credentials ----------
+
+    def _on_unlock_if_visible(self):
+        """Fire _on_unlock only when the credentials step is currently mapped."""
+        if self._picker_step is not None and self._picker_step.winfo_ismapped():
+            return
+        self._on_unlock()
+
     def _build_credentials_step(self, parent) -> ctk.CTkFrame:
         frame = ctk.CTkFrame(parent, fg_color=config.WHITE)
 
-        self._username = FormField(frame, "Username")
-        self._username.pack(fill="x", pady=4)
-        self._advisor = FormField(frame, "Advisor Last Name")
-        self._advisor.pack(fill="x", pady=4)
+        ctk.CTkLabel(
+            frame,
+            text="Sign in to begin your session",
+            font=theme.font_h2(),
+            text_color=config.GRAY_900,
+        ).pack(anchor="w", pady=(0, 16))
 
-        self._error = ctk.CTkLabel(
-            frame, text="",
-            font=theme.font_caption(),
-            text_color=config.URGENT_RED,
+        self._username = FormField(frame, "OU NetID (4x4)")
+        self._username.pack(fill="x", pady=(0, 10))
+
+        self._advisor = FormField(frame, "Advisor Last Name")
+        self._advisor.pack(fill="x", pady=(0, 14))
+
+        self._status = ctk.CTkLabel(
+            frame, text="", font=theme.font_caption(),
+            text_color=config.URGENT_RED, anchor="w",
         )
-        self._error.pack(anchor="w", pady=(4, 0))
+        self._status.pack(fill="x")
 
         ctk.CTkButton(
-            frame, text="Continue",
-            command=self._submit_credentials,
+            frame, text="UNLOCK",
+            command=self._on_unlock,
             font=theme.font_body_bold(),
-            height=36,
+            height=42,
             **theme.CRIMSON_BUTTON_KW,
-        ).pack(fill="x", pady=(12, 4))
+        ).pack(fill="x", pady=(12, 6))
 
         ctk.CTkButton(
             frame, text="Admin Portal",
@@ -65,25 +83,77 @@ class LoginView(ctk.CTkFrame):
             font=theme.font_caption(),
             height=28,
             **theme.OUTLINE_BUTTON_KW,
+        ).pack(fill="x", pady=(0, 6))
+
+        win_user = auth.current_windows_username()
+        win_label = (
+            f"Sign in with Windows ({win_user})" if win_user else "Sign in with Windows"
+        )
+        ctk.CTkButton(
+            frame, text=win_label,
+            command=self._on_windows_login,
+            font=theme.font_caption(),
+            height=28,
+            **theme.OUTLINE_BUTTON_KW,
         ).pack(fill="x")
 
         return frame
 
-    def _submit_credentials(self):
+    def _on_unlock(self) -> None:
+        self._username.clear_error()
+        self._advisor.clear_error()
+        self._status.configure(text="")
+
         un = self._username.value().strip()
         adv = self._advisor.value().strip()
-        if not un or not adv:
-            self._error.configure(text="Both fields are required.")
+
+        has_error = False
+        if not un:
+            self._username.set_error("NetID required")
+            has_error = True
+        if not adv:
+            self._advisor.set_error("Advisor last name required")
+            has_error = True
+        if has_error:
             return
+
         user = auth.verify_credentials(un, adv)
         if user is None:
-            self._error.configure(text="Username or advisor name not recognized.")
+            self._status.configure(
+                text="Credentials not recognized. Check NetID and advisor name."
+            )
+            self._username.set_error(" ")
+            self._advisor.set_error(" ")
             return
-        self._error.configure(text="")
+
+        self._username.set_value("")
+        self._advisor.set_value("")
+        self._authed_user = user
+        self._show_picker_step()
+
+    def _on_windows_login(self) -> None:
+        self._username.clear_error()
+        self._advisor.clear_error()
+        self._status.configure(text="")
+        user, win_username = auth.verify_windows_user()
+        if user is None:
+            if win_username:
+                self._status.configure(
+                    text=(
+                        f"Windows account '{win_username}' is not registered. "
+                        "Ask admin to add you."
+                    ),
+                )
+            else:
+                self._status.configure(text="Could not read your Windows username.")
+            return
+        self._username.set_value("")
+        self._advisor.set_value("")
         self._authed_user = user
         self._show_picker_step()
 
     # ---------- step 2: app picker ----------
+
     def _build_picker_step(self, parent) -> ctk.CTkFrame:
         frame = ctk.CTkFrame(parent, fg_color=config.WHITE)
 
@@ -124,7 +194,7 @@ class LoginView(ctk.CTkFrame):
         return frame
 
     def _populate_picker(self):
-        # Clear any previous checkboxes
+        # Clear any previous checkboxes.
         for child in list(self._picker_list.winfo_children()):
             child.destroy()
         self._app_vars = []
@@ -177,10 +247,12 @@ class LoginView(ctk.CTkFrame):
         self._on_login_success(self._authed_user, selected)
 
     # ---------- step switching ----------
+
     def _show_credentials_step(self):
         if self._picker_step is not None:
             self._picker_step.pack_forget()
         self._cred_step.pack(fill="both", expand=True)
+        self.after(100, self._username.focus)
 
     def _show_picker_step(self):
         if self._picker_step is None:
@@ -190,9 +262,12 @@ class LoginView(ctk.CTkFrame):
         self._populate_picker()
 
     # ---------- public ----------
-    def reset(self):
+
+    def reset(self) -> None:
         self._authed_user = None
-        self._username.set("")
-        self._advisor.set("")
-        self._error.configure(text="")
+        self._username.set_value("")
+        self._advisor.set_value("")
+        self._username.clear_error()
+        self._advisor.clear_error()
+        self._status.configure(text="")
         self._show_credentials_step()

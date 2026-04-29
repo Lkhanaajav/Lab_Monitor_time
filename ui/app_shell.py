@@ -158,9 +158,10 @@ class AppShell(ctk.CTk):
             self._show_login()
             return
 
-        # NOTE: we no longer terminate the session when an allowed PID dies.
-        # Per design, closed apps stay closed; the timer or FINISH SESSION
-        # ends the session.
+        if session.all_apps_closed(self.state_):
+            session.end_session(self.state_, "AllAppsClosed", app_registry.load_apps())
+            self._show_login()
+            return
 
         self._schedule_tick()
 

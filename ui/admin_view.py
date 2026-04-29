@@ -1,5 +1,5 @@
 """Admin portal — logs, user management, integrity verification."""
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from tkinter import filedialog, messagebox, ttk
 
 import customtkinter as ctk
@@ -104,12 +104,31 @@ class AdminWindow(ctk.CTkToplevel):
             )
             return
 
-        entries = audit_log.read_entries()
-        if not entries:
+        all_entries = audit_log.read_entries()
+        if not all_entries:
             messagebox.showinfo("Export", "No log entries to export.", parent=self)
             return
 
-        default_name = f"lab_usage_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        dlg = ExportRangeDialog(self)
+        self.wait_window(dlg)
+        if dlg.result is None:
+            return
+        start_date, end_date, label = dlg.result
+
+        entries = [
+            e for e in all_entries
+            if _entry_in_range(e.get("Date", ""), start_date, end_date)
+        ]
+        if not entries:
+            messagebox.showinfo(
+                "Export",
+                f"No log entries between {start_date} and {end_date}.",
+                parent=self,
+            )
+            return
+
+        suffix = label or f"{start_date}_to_{end_date}"
+        default_name = f"lab_usage_log_{suffix}.xlsx"
         path = filedialog.asksaveasfilename(
             parent=self,
             title="Export Usage Logs",
@@ -138,7 +157,11 @@ class AdminWindow(ctk.CTkToplevel):
             messagebox.showerror("Export failed", str(e), parent=self)
             return
 
-        messagebox.showinfo("Export", f"Exported {len(entries)} rows to:\n{path}", parent=self)
+        messagebox.showinfo(
+            "Export",
+            f"Exported {len(entries)} rows ({start_date} to {end_date}) to:\n{path}",
+            parent=self,
+        )
 
     # ---------- Users tab ----------
     def _build_users_tab(self, parent):
@@ -377,17 +400,194 @@ class RegistrationDialog(ctk.CTkToplevel):
 
 
 def prompt_admin_password(parent) -> bool:
-    dlg = ctk.CTkInputDialog(
-        title="Admin Portal",
-        text="Enter admin password:",
-    )
-    entered = dlg.get_input()
-    if entered is None:
+    dlg = AdminPasswordDialog(parent)
+    parent.wait_window(dlg)
+    if dlg.result is None:
         return False
-    if entered == config.ADMIN_PASSWORD:
+    if dlg.result == config.ADMIN_PASSWORD:
         return True
     messagebox.showerror("Denied", "Incorrect password", parent=parent)
     return False
+
+
+class AdminPasswordDialog(ctk.CTkToplevel):
+    """Themed admin-password prompt — matches OU crimson style."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Admin Portal")
+        self.geometry("380x300")
+        self.minsize(380, 300)
+        self.configure(fg_color=config.WHITE)
+        self.transient(parent)
+        self.grab_set()
+        self.result: str | None = None
+
+        HeaderBar(self, "Admin Portal", "Enter admin password").pack(fill="x")
+
+        body = ctk.CTkFrame(self, fg_color=config.WHITE)
+        body.pack(fill="both", expand=True, padx=20, pady=14)
+
+        self._field = FormField(body, "Password", show="*")
+        self._field.pack(fill="x")
+        self._field.focus()
+
+        btns = ctk.CTkFrame(self, fg_color="transparent")
+        btns.pack(fill="x", padx=20, pady=(0, 14))
+        ctk.CTkButton(
+            btns, text="Cancel",
+            command=self._cancel,
+            font=theme.font_caption(),
+            height=32, width=100,
+            **theme.OUTLINE_BUTTON_KW,
+        ).pack(side="right", padx=4)
+        ctk.CTkButton(
+            btns, text="Unlock",
+            command=self._submit,
+            font=theme.font_body_bold(),
+            height=32, width=120,
+            **theme.CRIMSON_BUTTON_KW,
+        ).pack(side="right", padx=4)
+
+        self.bind("<Return>", lambda _e: self._submit())
+        self.bind("<Escape>", lambda _e: self._cancel())
+
+    def _submit(self) -> None:
+        self.result = self._field.value()
+        self.destroy()
+
+    def _cancel(self) -> None:
+        self.result = None
+        self.destroy()
+
+
+def _entry_in_range(date_str: str, start: str, end: str) -> bool:
+    if not date_str:
+        return False
+    return start <= date_str <= end
+
+
+def _preset_range(preset: str) -> tuple[str, str, str]:
+    today = date.today()
+    if preset == "Last 7 Days":
+        return (today - timedelta(days=6)).isoformat(), today.isoformat(), "last_7_days"
+    if preset == "Last 30 Days":
+        return (today - timedelta(days=29)).isoformat(), today.isoformat(), "last_30_days"
+    if preset == "This Month":
+        first = today.replace(day=1)
+        return first.isoformat(), today.isoformat(), today.strftime("%Y_%m")
+    if preset == "Last Month":
+        first_this = today.replace(day=1)
+        last_prev = first_this - timedelta(days=1)
+        first_prev = last_prev.replace(day=1)
+        return first_prev.isoformat(), last_prev.isoformat(), last_prev.strftime("%Y_%m")
+    if preset == "This Year":
+        return today.replace(month=1, day=1).isoformat(), today.isoformat(), str(today.year)
+    return "1900-01-01", today.isoformat(), "all_time"
+
+
+class ExportRangeDialog(ctk.CTkToplevel):
+    """Picks a date range for exporting usage logs. `result` is (start, end, label) or None."""
+
+    PRESETS = ("All Time", "This Month", "Last Month", "Last 7 Days", "Last 30 Days", "This Year", "Custom")
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Export Date Range")
+        self.geometry("420x460")
+        self.minsize(420, 460)
+        self.configure(fg_color=config.WHITE)
+        self.transient(parent)
+        self.grab_set()
+        self.result: tuple[str, str, str] | None = None
+
+        HeaderBar(self, "Export Range", "Pick a preset or enter custom dates").pack(fill="x")
+
+        body = ctk.CTkFrame(self, fg_color=config.WHITE)
+        body.pack(fill="both", expand=True, padx=20, pady=12)
+
+        ctk.CTkLabel(
+            body, text="Preset",
+            font=theme.font_caption(),
+            text_color=config.GRAY_600,
+        ).pack(anchor="w")
+        self._preset_var = ctk.StringVar(value="This Month")
+        ctk.CTkOptionMenu(
+            body, values=list(self.PRESETS),
+            variable=self._preset_var,
+            command=self._on_preset_changed,
+            fg_color=config.CRIMSON,
+            button_color=config.CRIMSON_HOVER,
+            button_hover_color=config.CRIMSON_HOVER,
+            text_color=config.WHITE,
+            font=theme.font_body_bold(),
+            height=36,
+            dropdown_fg_color=config.WHITE,
+            dropdown_hover_color=config.CRIMSON,
+            dropdown_text_color=config.GRAY_900,
+            dropdown_font=theme.font_body(),
+        ).pack(fill="x", pady=(2, 12))
+
+        self._start = FormField(body, "Start Date (YYYY-MM-DD)")
+        self._start.pack(fill="x", pady=4)
+        self._end = FormField(body, "End Date (YYYY-MM-DD)")
+        self._end.pack(fill="x", pady=4)
+
+        self._on_preset_changed("This Month")
+
+        btns = ctk.CTkFrame(self, fg_color="transparent")
+        btns.pack(fill="x", padx=20, pady=(0, 14))
+        ctk.CTkButton(
+            btns, text="Cancel",
+            command=self._cancel,
+            font=theme.font_caption(),
+            height=32, width=100,
+            **theme.OUTLINE_BUTTON_KW,
+        ).pack(side="right", padx=4)
+        ctk.CTkButton(
+            btns, text="Export",
+            command=self._submit,
+            font=theme.font_body_bold(),
+            height=32, width=120,
+            **theme.CRIMSON_BUTTON_KW,
+        ).pack(side="right", padx=4)
+
+    def _on_preset_changed(self, value: str) -> None:
+        if value == "Custom":
+            return
+        start, end, _ = _preset_range(value)
+        self._start.set(start)
+        self._end.set(end)
+
+    def _submit(self) -> None:
+        start = self._start.value().strip()
+        end = self._end.value().strip()
+        self._start.clear_error()
+        self._end.clear_error()
+        try:
+            sd = datetime.strptime(start, "%Y-%m-%d").date()
+        except ValueError:
+            self._start.set_error("Use YYYY-MM-DD")
+            return
+        try:
+            ed = datetime.strptime(end, "%Y-%m-%d").date()
+        except ValueError:
+            self._end.set_error("Use YYYY-MM-DD")
+            return
+        if sd > ed:
+            self._end.set_error("End must be on/after start")
+            return
+        preset = self._preset_var.get()
+        if preset == "Custom":
+            label = f"{start}_to_{end}"
+        else:
+            _, _, label = _preset_range(preset)
+        self.result = (start, end, label)
+        self.destroy()
+
+    def _cancel(self) -> None:
+        self.result = None
+        self.destroy()
 
 
 class AppDialog(ctk.CTkToplevel):

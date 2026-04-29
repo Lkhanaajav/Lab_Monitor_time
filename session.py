@@ -7,7 +7,7 @@ import audit_log
 import config
 import process_guard
 
-LogoutReason = Literal["Manual", "Timeout", "AppClose"]
+LogoutReason = Literal["Manual", "Timeout", "AppClose", "AllAppsClosed"]
 
 
 @dataclass
@@ -43,6 +43,7 @@ STATUS_BY_REASON = {
     "Manual": None,  # uses combobox value
     "Timeout": "FORGOT TO LOG OUT (Auto-Lock)",
     "AppClose": "Portal closed mid-session",
+    "AllAppsClosed": "All apps closed",
 }
 
 
@@ -113,6 +114,12 @@ def end_session(
         process_guard.terminate(pid)
     process_guard.purge_orphans_many([a["exe_path"] for a in registered_apps])
     state.clear()
+
+
+def all_apps_closed(state: SessionState) -> bool:
+    if not state.active or not state.allowed_pids:
+        return False
+    return not any(process_guard.is_alive(pid) for pid in state.allowed_pids)
 
 
 def seconds_remaining(state: SessionState) -> int:

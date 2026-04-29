@@ -4,6 +4,7 @@ from tkinter import filedialog, messagebox, ttk
 
 import customtkinter as ctk
 
+import app_registry
 import audit_log
 import auth
 import config
@@ -34,10 +35,12 @@ class AdminWindow(ctk.CTkToplevel):
 
         self._tabs.add("Usage Logs")
         self._tabs.add("Manage Users")
+        self._tabs.add("Manage Apps")
         self._tabs.add("Integrity")
 
         self._build_logs_tab(self._tabs.tab("Usage Logs"))
         self._build_users_tab(self._tabs.tab("Manage Users"))
+        self._build_apps_tab(self._tabs.tab("Manage Apps"))
         self._build_integrity_tab(self._tabs.tab("Integrity"))
 
     # ---------- Logs tab ----------
@@ -186,6 +189,99 @@ class AdminWindow(ctk.CTkToplevel):
     def _open_registration(self):
         RegistrationDialog(self, on_saved=self._refresh_users)
 
+    # ---------- Manage Apps tab ----------
+    def _build_apps_tab(self, parent):
+        container = ctk.CTkFrame(parent, fg_color=config.WHITE)
+        container.pack(fill="both", expand=True, padx=6, pady=6)
+
+        cols = ("Display Name", "Exe Path", "Window Hint")
+        self._app_tree = ttk.Treeview(container, columns=cols, show="headings", height=12)
+        widths = {"Display Name": 180, "Exe Path": 360, "Window Hint": 160}
+        for c in cols:
+            self._app_tree.heading(c, text=c)
+            self._app_tree.column(c, width=widths.get(c, 140), anchor="w")
+        self._app_tree.pack(side="left", fill="both", expand=True)
+
+        scroll = ttk.Scrollbar(container, orient="vertical", command=self._app_tree.yview)
+        scroll.pack(side="right", fill="y")
+        self._app_tree.configure(yscrollcommand=scroll.set)
+
+        btn_row = ctk.CTkFrame(parent, fg_color="transparent")
+        btn_row.pack(pady=6)
+        ctk.CTkButton(
+            btn_row, text="Add App",
+            command=self._open_app_add,
+            font=theme.font_body_bold(),
+            height=32, width=120,
+            **theme.CRIMSON_BUTTON_KW,
+        ).pack(side="left", padx=4)
+        ctk.CTkButton(
+            btn_row, text="Edit Selected",
+            command=self._open_app_edit,
+            font=theme.font_caption(),
+            height=32, width=120,
+            **theme.OUTLINE_BUTTON_KW,
+        ).pack(side="left", padx=4)
+        ctk.CTkButton(
+            btn_row, text="Remove Selected",
+            command=self._remove_app,
+            font=theme.font_caption(),
+            height=32, width=140,
+            **theme.OUTLINE_BUTTON_KW,
+        ).pack(side="left", padx=4)
+        ctk.CTkButton(
+            btn_row, text="Refresh",
+            command=self._refresh_apps,
+            font=theme.font_caption(),
+            height=32, width=100,
+            **theme.OUTLINE_BUTTON_KW,
+        ).pack(side="left", padx=4)
+
+        self._refresh_apps()
+
+    def _refresh_apps(self):
+        for item in self._app_tree.get_children():
+            self._app_tree.delete(item)
+        for a in app_registry.load_apps():
+            self._app_tree.insert("", "end", values=(
+                a.get("display_name", ""),
+                a.get("exe_path", ""),
+                a.get("window_hint", ""),
+            ))
+
+    def _selected_app_display_name(self) -> str | None:
+        sel = self._app_tree.selection()
+        if not sel:
+            return None
+        values = self._app_tree.item(sel[0], "values")
+        return values[0] if values else None
+
+    def _open_app_add(self):
+        AppDialog(self, on_saved=self._refresh_apps, existing=None)
+
+    def _open_app_edit(self):
+        name = self._selected_app_display_name()
+        if not name:
+            messagebox.showinfo("Edit", "Select an app first.", parent=self)
+            return
+        existing = app_registry.find_app(name)
+        if existing is None:
+            messagebox.showerror("Edit", f"App '{name}' not found.", parent=self)
+            self._refresh_apps()
+            return
+        AppDialog(self, on_saved=self._refresh_apps, existing=existing)
+
+    def _remove_app(self):
+        name = self._selected_app_display_name()
+        if not name:
+            messagebox.showinfo("Remove", "Select an app first.", parent=self)
+            return
+        if not messagebox.askyesno("Remove", f"Remove '{name}' from the registered list?", parent=self):
+            return
+        if not app_registry.remove_app(name):
+            messagebox.showerror("Remove", f"App '{name}' not found.", parent=self)
+        self._refresh_apps()
+
     # ---------- Integrity tab ----------
     def _build_integrity_tab(self, parent):
         container = ctk.CTkFrame(parent, fg_color=config.WHITE)
@@ -292,3 +388,83 @@ def prompt_admin_password(parent) -> bool:
         return True
     messagebox.showerror("Denied", "Incorrect password", parent=parent)
     return False
+
+
+class AppDialog(ctk.CTkToplevel):
+    """Add or edit a registered app. If `existing` is given, dialog is in edit mode."""
+
+    def __init__(self, parent, on_saved, existing: dict | None):
+        super().__init__(parent)
+        self._existing = existing
+        self._on_saved = on_saved
+        self.title("Edit App" if existing else "Add App")
+        self.geometry("440x340")
+        self.configure(fg_color=config.WHITE)
+        self.transient(parent)
+        self.grab_set()
+
+        title = "Edit App" if existing else "Add App"
+        subtitle = "Update an existing entry" if existing else "Register a new app"
+        HeaderBar(self, title, subtitle).pack(fill="x")
+
+        body = ctk.CTkFrame(self, fg_color=config.WHITE)
+        body.pack(fill="both", expand=True, padx=16, pady=12)
+
+        self._fields: dict[str, FormField] = {}
+        for fname in config.APP_FIELDS:
+            label = fname.replace("_", " ").title()
+            ff = FormField(body, label)
+            ff.pack(fill="x", pady=4)
+            if existing:
+                ff.set(existing.get(fname, ""))
+            self._fields[fname] = ff
+
+        # Browse button next to exe_path
+        browse_row = ctk.CTkFrame(body, fg_color="transparent")
+        browse_row.pack(fill="x", pady=(0, 4))
+        ctk.CTkButton(
+            browse_row, text="Browse…",
+            command=self._browse_exe,
+            font=theme.font_caption(),
+            height=26, width=100,
+            **theme.OUTLINE_BUTTON_KW,
+        ).pack(anchor="e")
+
+        ctk.CTkButton(
+            self, text="Save",
+            command=self._save,
+            font=theme.font_body_bold(),
+            height=36,
+            **theme.CRIMSON_BUTTON_KW,
+        ).pack(fill="x", padx=16, pady=(4, 14))
+
+    def _browse_exe(self):
+        path = filedialog.askopenfilename(
+            parent=self,
+            title="Select executable",
+            filetypes=[("Executables", "*.exe"), ("All files", "*.*")],
+        )
+        if path:
+            self._fields["exe_path"].set(path)
+
+    def _save(self):
+        row = {f: self._fields[f].value().strip() for f in config.APP_FIELDS}
+        for f in config.APP_FIELDS:
+            self._fields[f].clear_error()
+
+        if self._existing is None:
+            err = app_registry.append_app(row)
+        else:
+            err = app_registry.update_app(self._existing["display_name"], row)
+
+        if err is not None:
+            # Heuristic: route message to the relevant field if obvious
+            if "Display name" in err:
+                self._fields["display_name"].set_error(err)
+            elif "Exe path" in err:
+                self._fields["exe_path"].set_error(err)
+            else:
+                messagebox.showerror("Save failed", err, parent=self)
+            return
+        self._on_saved()
+        self.destroy()

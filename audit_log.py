@@ -162,22 +162,12 @@ def verify_chain() -> tuple[bool, int | None, str]:
             skipped_v1 += 1
             continue
 
-        # v2: 11 columns, no Apps field. Verify against the v2 layout but do
-        # NOT chain into prev_hash for v3 rows — once we cross into v3 we
-        # require unbroken v3-format chain. v2 rows are accepted but skipped
-        # for chain continuity.
+        # v2: 11 columns, no Apps field. The format changed at this point;
+        # _last_row_hash skips v2 rows when computing PrevHash for new v3
+        # entries (because v2 rows have fewer columns than COLUMNS), so v2
+        # rows must NOT advance prev_hash here either. We don't re-verify
+        # the v2 chain — the format change is the boundary.
         if len(row) == len(LEGACY_V2_COLUMNS):
-            stored_prev = row[-2]
-            stored_hash = row[-1]
-            fields = row[:9]
-            expected = _row_hmac(prev_hash, fields, key)
-            if stored_prev != prev_hash or not hmac.compare_digest(expected, stored_hash):
-                # v2 chain broke — count as a skip rather than a hard failure,
-                # because the chain format itself changed at the boundary.
-                skipped_v2 += 1
-                prev_hash = stored_hash  # advance anyway so v3 rows can chain
-                continue
-            prev_hash = stored_hash
             skipped_v2 += 1
             continue
 

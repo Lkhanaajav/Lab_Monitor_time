@@ -4,9 +4,6 @@ from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
 
-TARGET_APP_NAME = "notepad.exe"
-TARGET_APP_WINDOW_HINT = "Notepad"
-
 # Shared data directory for multi-user lab PC.
 # Falls back to app folder if PROGRAMDATA is unavailable.
 _PROGRAMDATA = os.environ.get("PROGRAMDATA") or os.environ.get("ProgramData")
@@ -20,6 +17,7 @@ LEGACY_DATA_DIR = _HERE  # Where data lived before the move — used once for mi
 USER_LIST_FILE = DATA_DIR / "allowed_users.csv"
 LOG_FILE = DATA_DIR / "usage_log.csv"
 AUDIT_KEY_FILE = DATA_DIR / ".audit_key"
+REGISTERED_APPS_FILE = DATA_DIR / "registered_apps.csv"
 
 ADMIN_PASSWORD = "OU_Admin_2026"
 
@@ -64,3 +62,5 @@ USER_FIELDS = (
     "school_affiliation", "advisor_first", "advisor_last",
     "username", "equipment_name",
 )
+
+APP_FIELDS = ("display_name", "exe_path", "window_hint")

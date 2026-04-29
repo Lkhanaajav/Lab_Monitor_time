@@ -109,11 +109,8 @@ class FormField(ctk.CTkFrame):
         return self._entry.get()
 
     def set(self, value: str) -> None:
-        try:
-            self._entry.delete(0, "end")
-            self._entry.insert(0, value)
-        except Exception:
-            pass
+        self._entry.delete(0, "end")
+        self._entry.insert(0, value)
 
     def set_value(self, v: str) -> None:
         self._entry.delete(0, "end")

@@ -7,7 +7,7 @@ import audit_log
 import config
 import process_guard
 
-LogoutReason = Literal["Manual", "Timeout", "ProcessExit", "AppClose"]
+LogoutReason = Literal["Manual", "Timeout", "AppClose"]
 
 
 @dataclass
@@ -21,7 +21,8 @@ class TickRecord:
 class SessionState:
     user: Optional[dict] = None
     start_ts: Optional[float] = None
-    allowed_pid: Optional[int] = None
+    allowed_pids: list[int] = field(default_factory=list)
+    selected_apps: list[dict] = field(default_factory=list)
     status_report: str = "Runs Smoothly"
     _flash_on: bool = field(default=False, repr=False)
 
@@ -32,7 +33,8 @@ class SessionState:
     def clear(self) -> None:
         self.user = None
         self.start_ts = None
-        self.allowed_pid = None
+        self.allowed_pids = []
+        self.selected_apps = []
         self.status_report = "Runs Smoothly"
         self._flash_on = False
 
@@ -40,42 +42,76 @@ class SessionState:
 STATUS_BY_REASON = {
     "Manual": None,  # uses combobox value
     "Timeout": "FORGOT TO LOG OUT (Auto-Lock)",
-    "ProcessExit": "Target app closed mid-session",
     "AppClose": "Portal closed mid-session",
 }
 
 
-def start_session(state: SessionState, user: dict) -> bool:
-    process_guard.purge_orphans(config.TARGET_APP_NAME)
-    try:
-        pid = process_guard.spawn(config.TARGET_APP_NAME)
-    except (FileNotFoundError, OSError):
-        return False
+def start_session(
+    state: SessionState,
+    user: dict,
+    selected_apps: list[dict],
+    registered_apps: list[dict],
+) -> tuple[bool, Optional[str]]:
+    """Spawn every selected app under one session.
+
+    Returns (True, None) on success, or (False, error_message) if any spawn
+    fails. On failure, all already-spawned PIDs from this attempt are
+    terminated so no orphans are left.
+
+    `registered_apps` is the full admin list — used to purge stragglers across
+    the entire registered set before launching.
+    """
+    if not selected_apps:
+        return False, "No apps selected."
+
+    process_guard.purge_orphans_many([a["exe_path"] for a in registered_apps])
+
+    spawned: list[int] = []
+    for app in selected_apps:
+        try:
+            pid = process_guard.spawn(app["exe_path"])
+        except (FileNotFoundError, OSError) as e:
+            for p in spawned:
+                process_guard.terminate(p)
+            return False, f"Could not start '{app['display_name']}' ({app['exe_path']}): {e}"
+        spawned.append(pid)
+
     state.user = user
     state.start_ts = time.time()
-    state.allowed_pid = pid
+    state.allowed_pids = spawned
+    state.selected_apps = list(selected_apps)
     state.status_report = "Runs Smoothly"
     state._flash_on = False
-    return True
+    return True, None
 
 
-def end_session(state: SessionState, reason: LogoutReason) -> None:
+def end_session(
+    state: SessionState,
+    reason: LogoutReason,
+    registered_apps: list[dict],
+) -> None:
     if not state.active:
         return
     user = state.user
     start_ts = state.start_ts
-    pid = state.allowed_pid
+    pids = list(state.allowed_pids)
+    selected = list(state.selected_apps)
     status = STATUS_BY_REASON[reason] or state.status_report
 
     try:
-        audit_log.append_entry(user, start_ts, time.time(), status)
+        audit_log.append_entry(
+            user,
+            start_ts,
+            time.time(),
+            status,
+            [a["display_name"] for a in selected],
+        )
     except Exception as e:
-        # If logging fails we must still clean up; surface the error via print
-        # (UI callback will handle display).
         print(f"[audit_log] append failed: {e}")
 
-    process_guard.terminate(pid)
-    process_guard.purge_orphans(config.TARGET_APP_NAME)
+    for pid in pids:
+        process_guard.terminate(pid)
+    process_guard.purge_orphans_many([a["exe_path"] for a in registered_apps])
     state.clear()
 
 

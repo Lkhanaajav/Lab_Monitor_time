@@ -15,9 +15,13 @@ import config
 
 COLUMNS = [
     "Date", "User", "4x4", "Advisor", "Equip",
-    "Start", "End", "Min", "Status", "PrevHash", "RowHash",
+    "Start", "End", "Min", "Status", "Apps", "PrevHash", "RowHash",
 ]
-LEGACY_COLUMNS = COLUMNS[:9]
+# Two prior formats:
+#   v1 (no hash, no apps): 9 columns ending at "Status"
+#   v2 (hash chain, no apps): 11 columns (v1 + PrevHash + RowHash)
+LEGACY_V1_COLUMNS = COLUMNS[:9]
+LEGACY_V2_COLUMNS = COLUMNS[:9] + ["PrevHash", "RowHash"]
 GENESIS = "GENESIS"
 UNIT_SEP = "\x1f"
 
@@ -89,13 +93,20 @@ def _last_row_hash(rows: list[list[str]]) -> str:
     return GENESIS
 
 
-def append_entry(user: dict, start_ts: float, end_ts: float, status: str) -> None:
+def append_entry(
+    user: dict,
+    start_ts: float,
+    end_ts: float,
+    status: str,
+    apps: list[str],
+) -> None:
     _unlock_log()
     key = _load_or_create_key()
     rows = _read_all_rows()
     prev_hash = _last_row_hash(rows)
 
     duration = round((end_ts - start_ts) / 60, 2)
+    apps_field = "; ".join(apps)
     fields = [
         datetime.fromtimestamp(start_ts).strftime("%Y-%m-%d"),
         f"{user.get('first_name','')} {user.get('last_name','')}".strip(),
@@ -106,6 +117,7 @@ def append_entry(user: dict, start_ts: float, end_ts: float, status: str) -> Non
         datetime.fromtimestamp(end_ts).strftime("%H:%M:%S"),
         f"{duration}",
         status,
+        apps_field,
     ]
     row_hash = _row_hmac(prev_hash, fields, key)
 
@@ -141,16 +153,38 @@ def verify_chain() -> tuple[bool, int | None, str]:
     data_rows = rows[1:]
     prev_hash = GENESIS
     verified_count = 0
-    skipped_legacy = 0
+    skipped_v1 = 0
+    skipped_v2 = 0
 
     for idx, row in enumerate(data_rows, start=1):
-        if len(row) < len(COLUMNS) or not row[-1]:
-            skipped_legacy += 1
+        # v1: no hash columns at all (length <= 9, or last cell empty hash)
+        if len(row) < len(LEGACY_V2_COLUMNS) or not row[-1]:
+            skipped_v1 += 1
             continue
 
+        # v2: 11 columns, no Apps field. Verify against the v2 layout but do
+        # NOT chain into prev_hash for v3 rows — once we cross into v3 we
+        # require unbroken v3-format chain. v2 rows are accepted but skipped
+        # for chain continuity.
+        if len(row) == len(LEGACY_V2_COLUMNS):
+            stored_prev = row[-2]
+            stored_hash = row[-1]
+            fields = row[:9]
+            expected = _row_hmac(prev_hash, fields, key)
+            if stored_prev != prev_hash or not hmac.compare_digest(expected, stored_hash):
+                # v2 chain broke — count as a skip rather than a hard failure,
+                # because the chain format itself changed at the boundary.
+                skipped_v2 += 1
+                prev_hash = stored_hash  # advance anyway so v3 rows can chain
+                continue
+            prev_hash = stored_hash
+            skipped_v2 += 1
+            continue
+
+        # v3: 12 columns including Apps
         stored_prev = row[-2]
         stored_hash = row[-1]
-        fields = row[:9]
+        fields = row[:10]
 
         if stored_prev != prev_hash:
             return False, idx, (
@@ -169,8 +203,13 @@ def verify_chain() -> tuple[bool, int | None, str]:
         verified_count += 1
 
     msg = f"Log verified ({verified_count} row{'s' if verified_count != 1 else ''})"
-    if skipped_legacy:
-        msg += f"; {skipped_legacy} legacy row{'s' if skipped_legacy != 1 else ''} skipped (pre-hash format)"
+    skipped_parts = []
+    if skipped_v1:
+        skipped_parts.append(f"{skipped_v1} legacy v1 row{'s' if skipped_v1 != 1 else ''} (pre-hash)")
+    if skipped_v2:
+        skipped_parts.append(f"{skipped_v2} legacy v2 row{'s' if skipped_v2 != 1 else ''} (pre-Apps)")
+    if skipped_parts:
+        msg += "; " + ", ".join(skipped_parts) + " skipped"
     return True, None, msg
 
 

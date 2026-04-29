@@ -1,6 +1,10 @@
 """Root application window — view switcher and session orchestrator."""
+import os
+import time
+
 import customtkinter as ctk
 
+import app_registry
 import config
 import process_guard
 import session
@@ -77,15 +81,26 @@ class AppShell(ctk.CTk):
         self.update_idletasks()
 
     # ---------- event handlers ----------
-    def _handle_login_success(self, user: dict) -> None:
+    def _handle_login_success(self, user: dict, selected_apps: list[dict]) -> None:
+        registered = app_registry.load_apps()
         self._starting_session = True
         try:
-            ok = session.start_session(self.state_, user)
+            ok, err = session.start_session(self.state_, user, selected_apps, registered)
         finally:
             self._starting_session = False
         if not ok:
+            WarningToast(
+                self,
+                title="Could not start session",
+                message=err or "Unknown error.",
+                color=config.URGENT_RED,
+                duration_ms=4500,
+            )
             return
-        process_guard.focus_window(config.TARGET_APP_WINDOW_HINT)
+        for app in selected_apps:
+            hint = app.get("window_hint") or ""
+            if hint:
+                process_guard.focus_window(hint)
         self._last_phase = "normal"
         self._show_active()
         self._schedule_tick()
@@ -93,7 +108,7 @@ class AppShell(ctk.CTk):
     def _handle_finish(self) -> None:
         self.state_.status_report = self._active.current_status()
         self._cancel_tick()
-        session.end_session(self.state_, "Manual")
+        session.end_session(self.state_, "Manual", app_registry.load_apps())
         self._show_login()
 
     def _handle_status_change(self, value: str) -> None:
@@ -111,7 +126,7 @@ class AppShell(ctk.CTk):
         self._cancel_watchdog()
         if self.state_.active:
             self._cancel_tick()
-            session.end_session(self.state_, "AppClose")
+            session.end_session(self.state_, "AppClose", app_registry.load_apps())
         self.destroy()
 
     # ---------- tick loop ----------
@@ -139,14 +154,13 @@ class AppShell(ctk.CTk):
             self._last_phase = record.phase
 
         if record.remaining_sec <= 0:
-            session.end_session(self.state_, "Timeout")
+            session.end_session(self.state_, "Timeout", app_registry.load_apps())
             self._show_login()
             return
 
-        if not process_guard.is_alive(self.state_.allowed_pid):
-            session.end_session(self.state_, "ProcessExit")
-            self._show_login()
-            return
+        # NOTE: we no longer terminate the session when an allowed PID dies.
+        # Per design, closed apps stay closed; the timer or FINISH SESSION
+        # ends the session.
 
         self._schedule_tick()
 
@@ -203,41 +217,62 @@ class AppShell(ctk.CTk):
         try:
             if self._starting_session:
                 return
-            pids = process_guard.list_matching_pids(config.TARGET_APP_NAME)
-            allowed = self.state_.allowed_pid if self.state_.active else None
-            unauthorized = [p for p in pids if p != allowed]
-            if unauthorized:
-                for pid in unauthorized:
-                    process_guard.terminate(pid)
+
+            registered = app_registry.load_apps()
+            if not registered:
+                return
+
+            registered_paths = [a["exe_path"] for a in registered]
+            seen = process_guard.list_matching_pids_many(registered_paths)
+            allowed = set(self.state_.allowed_pids) if self.state_.active else set()
+
+            killed_any = False
+            if self.state_.active:
+                selected_basenames = {
+                    os.path.basename(a["exe_path"]).lower()
+                    for a in self.state_.selected_apps
+                }
+            else:
+                selected_basenames = set()
+
+            for pid, basename in seen:
+                if pid in allowed:
+                    continue
+                # During an active session, adopt re-launches of the user's selected apps.
+                if self.state_.active and basename in selected_basenames:
+                    self.state_.allowed_pids.append(pid)
+                    continue
+                # Otherwise: kill it.
+                process_guard.terminate(pid)
+                killed_any = True
+
+            if killed_any and not self.state_.active:
                 self._handle_unauthorized_launch()
         finally:
             self._schedule_watchdog()
 
     def _handle_unauthorized_launch(self) -> None:
-        import time
         now = time.time()
-        # Rate-limit the toast so it doesn't spam on repeated launches
         if now - self._last_block_notified_at < 4.0:
             return
         self._last_block_notified_at = now
 
-        if not self.state_.active:
-            try:
-                self.deiconify()
-                self.lift()
-                self.focus_force()
-            except Exception:
-                pass
-            try:
-                WarningToast(
-                    self,
-                    title="Access blocked",
-                    message="Sign in through the portal to use lab equipment.",
-                    color=config.URGENT_RED,
-                    duration_ms=3500,
-                )
-            except Exception:
-                pass
+        try:
+            self.deiconify()
+            self.lift()
+            self.focus_force()
+        except Exception:
+            pass
+        try:
+            WarningToast(
+                self,
+                title="Access blocked",
+                message="Sign in through the portal to use lab equipment.",
+                color=config.URGENT_RED,
+                duration_ms=3500,
+            )
+        except Exception:
+            pass
 
     # ---------- utilities ----------
     @staticmethod
